@@ -11,7 +11,8 @@ public record OrderResponse(
         Long eventId,
         OrderStatus status,
         String reservationId,
-        Instant createdAt
+        Instant createdAt,
+        Instant expiresAt
 ) {
     public static OrderResponse from(Order order) {
         return new OrderResponse(
@@ -20,7 +21,8 @@ public record OrderResponse(
                 order.getEventId(),
                 order.getStatus(),
                 order.getReservationId(),
-                order.getCreatedAt()
+                order.getCreatedAt(),
+                order.getExpiresAt()
         );
     }
 }

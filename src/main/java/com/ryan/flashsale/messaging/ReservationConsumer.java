@@ -8,6 +8,7 @@ import com.ryan.flashsale.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
@@ -26,6 +27,9 @@ public class ReservationConsumer {
 
     private final OrderRepository orderRepository;
 
+    @Value("${app.reservation-ttl-seconds:600}")
+    private long reservationTtlSeconds;
+
     @RabbitListener(queues = RabbitConfig.QUEUE, autoStartup = "${app.consumer-enabled:true}")
     public void onReservationCreated(ReservationMessage msg) {
         // Check-trước cho đường trùng phổ biến (đỡ tốn 1 insert fail + stacktrace)
@@ -40,6 +44,7 @@ public class ReservationConsumer {
                     .status(OrderStatus.RESERVED)
                     .reservationId(msg.reservationId())
                     .createdAt(msg.reservedAt())
+                    .expiresAt(msg.reservedAt().plusSeconds(reservationTtlSeconds))
                     .build();
             // saveAndFlush: 1 INSERT duy nhất, tự atomic — không cần @Transactional bao ngoài.
             // (Nếu bọc @Transactional rồi catch bên trong, transaction đã bị đánh dấu

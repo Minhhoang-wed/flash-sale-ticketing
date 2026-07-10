@@ -59,6 +59,9 @@ services:
       RESERVE_STRATEGY: ${RESERVE_STRATEGY:-redis}
       # false = tắt consumer để demo message chờ trong queue
       CONSUMER_ENABLED: ${CONSUMER_ENABLED:-true}
+      # Hạn giữ chỗ (giây) — demo unhappy path: đặt 60
+      RESERVATION_TTL_SECONDS: ${RESERVATION_TTL_SECONDS:-600}
+      EXPIRE_SCAN_MS: ${EXPIRE_SCAN_MS:-30000}
     ports:
       - "8080:8080"
 

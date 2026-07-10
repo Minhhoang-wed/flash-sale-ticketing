@@ -28,6 +28,10 @@ app:
   event-cache-ttl-seconds: 60
   # false = consumer không start -> message nằm chờ trong queue (demo Ngày 4)
   consumer-enabled: ${CONSUMER_ENABLED:true}
+  # Hạn giữ chỗ (Ngày 5). Demo nhanh: RESERVATION_TTL_SECONDS=60
+  reservation-ttl-seconds: ${RESERVATION_TTL_SECONDS:600}
+  # Chu kỳ quét đơn quá hạn
+  expire-scan-delay-ms: ${EXPIRE_SCAN_MS:30000}
 
 springdoc:
   swagger-ui:

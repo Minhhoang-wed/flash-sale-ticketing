@@ -165,3 +165,47 @@ log + bỏ qua êm (không ném lại — ném lại là message bị requeue, l
 callback khi chưa nhận 200. Xử lý y hệt: check `vnp_TxnRef` đã xử lý chưa,
 rồi mới cộng tiền/đổi trạng thái. Một pattern, hai bối cảnh — điểm ăn tiền
 khi phỏng vấn.
+
+---
+
+# NOTES — Ngày 5: Vòng đời vé đầy đủ (unhappy path)
+
+## Vòng đời
+
+```
+RESERVED ──pay (trước hạn)──> PAID
+    │
+    └──quá hạn (job quét 30s)──> EXPIRED ──INCR──> vé về kho, người khác mua được
+```
+
+- RESERVED có hạn `reservation-ttl-seconds` (mặc định 600s; demo đặt 60s).
+- `expiresAt` chốt ngay lúc tạo đơn = reservedAt + TTL.
+
+## Race giữa pay và expire — bài concurrency thứ 2
+
+Nếu viết kiểu đọc-check-ghi (đọc order → thấy RESERVED → set PAID/EXPIRED → save)
+thì pay và job expire có thể CÙNG thấy RESERVED → một đơn vừa PAID vừa EXPIRED
+(bên save sau đè bên trước), hoặc tệ hơn: đơn PAID nhưng vé vẫn bị INCR hoàn kho
+→ tổng vé > 100. Đây là đúng bài oversell Ngày 2 khoác áo khác.
+
+Giải pháp: **check-and-update trong MỘT câu UPDATE có điều kiện** (optimistic
+style trên cột status — không cần cột version vì status chính là "version"):
+
+- pay:    `UPDATE orders SET status='PAID'    WHERE id=? AND status='RESERVED' AND expires_at > now()`
+- expire: `UPDATE orders SET status='EXPIRED' WHERE id=? AND status='RESERVED'`
+
+DB row lock đảm bảo 2 câu UPDATE trên cùng 1 row chạy TUẦN TỰ. Ai chạy trước
+thì thắng; kẻ đến sau thấy status đã đổi → điều kiện WHERE fail → 0 row.
+Job CHỈ INCR trả vé khi update trả 1 → không bao giờ hoàn kho vé đã bán.
+Pay có thêm điều kiện `expires_at > now()` → không thanh toán được đơn đã
+quá hạn nhưng job chưa kịp quét (job chỉ chạy mỗi 30s).
+
+## Trả lời câu hỏi cuối ngày (câu PV số 7)
+
+"User giữ chỗ mà không thanh toán → đơn RESERVED có hạn 10 phút. Job @Scheduled
+quét mỗi 30s, đơn quá hạn bị chuyển EXPIRED bằng UPDATE có điều kiện, và chỉ khi
+update thành công mới INCR trả vé về Redis — vé quay lại kho cho người khác mua.
+Race giữa pay và expire: cả hai đều là conditional UPDATE trên status, DB row
+lock cho đúng một bên thắng, bên thua nhận 0 rows affected và xử lý theo —
+nên không tồn tại case vừa PAID vừa EXPIRED, cũng không có chuyện hoàn kho
+vé đã bán."

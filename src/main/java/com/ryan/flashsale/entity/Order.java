@@ -31,9 +31,17 @@ public class Order {
     @Column(nullable = false)
     private OrderStatus status;
 
+    /** Unique constraint = chốt chặn idempotency (Ngày 4). */
     @Column(nullable = false, unique = true)
     private String reservationId;
 
     @Column(nullable = false)
     private Instant createdAt;
+
+    /**
+     * Hạn giữ chỗ (Ngày 5): RESERVED chỉ sống đến thời điểm này.
+     * Quá hạn → job set EXPIRED + trả vé về kho Redis.
+     */
+    @Column
+    private Instant expiresAt;
 }

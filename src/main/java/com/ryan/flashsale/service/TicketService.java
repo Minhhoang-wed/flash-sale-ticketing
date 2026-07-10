@@ -56,6 +56,11 @@ public class TicketService {
     @Value("${app.event-cache-ttl-seconds:60}")
     private long eventCacheTtlSeconds;
 
+    /** Hạn giữ chỗ (Ngày 5). Demo nhanh: RESERVATION_TTL_SECONDS=60 */
+    @Getter
+    @Value("${app.reservation-ttl-seconds:600}")
+    private long reservationTtlSeconds;
+
     /** Đếm số lần optimistic lock bị conflict phải retry (so sánh Ngày 2) */
     private final AtomicLong optimisticRetries = new AtomicLong();
 
@@ -225,17 +230,27 @@ public class TicketService {
 
     // ==================== PAY ====================
 
-    @Transactional
+    /**
+     * PAY (Ngày 5): check-and-update trong 1 câu UPDATE có điều kiện.
+     * KHÔNG dùng read-check-write kiểu cũ — sẽ race với job expire y hệt
+     * bài oversell Ngày 2. UPDATE ... WHERE status='RESERVED' AND chưa quá hạn:
+     * pay và expire chỉ MỘT bên thắng nhờ row lock của DB.
+     */
     public Order pay(Long orderId) {
+        int updated = orderRepository.markPaidIfReservedAndNotExpired(
+                orderId, Instant.now(), OrderStatus.RESERVED, OrderStatus.PAID);
+        if (updated == 1) {
+            return orderRepository.findById(orderId).orElseThrow();
+        }
+        // 0 row bị update → chẩn đoán lý do để trả lỗi đúng
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new NotFoundException("Order not found: " + orderId));
-
-        if (order.getStatus() != OrderStatus.RESERVED) {
+        if (order.getStatus() == OrderStatus.RESERVED) {
             throw new InvalidOrderStateException(
-                    "Order " + orderId + " is " + order.getStatus() + ", expected RESERVED");
+                    "Order " + orderId + " reservation expired at " + order.getExpiresAt());
         }
-        order.setStatus(OrderStatus.PAID);
-        return orderRepository.save(order);
+        throw new InvalidOrderStateException(
+                "Order " + orderId + " is " + order.getStatus() + ", expected RESERVED");
     }
 
     // ==================== debug/demo helpers ====================
@@ -263,12 +278,14 @@ public class TicketService {
     }
 
     private Order createOrder(Long eventId, String userId) {
+        Instant now = Instant.now();
         Order order = Order.builder()
                 .userId(userId)
                 .eventId(eventId)
                 .status(OrderStatus.RESERVED)
                 .reservationId(UUID.randomUUID().toString())
-                .createdAt(Instant.now())
+                .createdAt(now)
+                .expiresAt(now.plusSeconds(reservationTtlSeconds))
                 .build();
         return orderRepository.save(order);
     }
