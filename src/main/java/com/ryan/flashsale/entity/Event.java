@@ -31,6 +31,16 @@ public class Event {
     @Column(nullable = false)
     private int remainingTickets;
 
+    /**
+     * Version cho optimistic lock THỦ CÔNG (Ngày 2).
+     * Cố ý KHÔNG dùng @Version của JPA: nếu dùng @Version thì Hibernate
+     * tự check version trên MỌI update → chiến lược naive sẽ không còn
+     * oversell được nữa, mất bài demo "before".
+     */
+    @Builder.Default
+    @Column(nullable = false, columnDefinition = "integer not null default 0")
+    private int version = 0;
+
     @Column(nullable = false)
     private Instant startSaleAt;
 }

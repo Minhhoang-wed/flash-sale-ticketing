@@ -26,6 +26,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashsale
       SPRING_DATASOURCE_USERNAME: flashsale
       SPRING_DATASOURCE_PASSWORD: flashsale
+      RESERVE_STRATEGY: ${RESERVE_STRATEGY:-naive}
     ports:
       - "8080:8080"
 

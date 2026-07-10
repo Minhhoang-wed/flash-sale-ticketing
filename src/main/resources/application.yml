@@ -13,6 +13,10 @@ spring:
       hibernate:
         format_sql: true
 
+app:
+  # naive | pessimistic | optimistic
+  reserve-strategy: ${RESERVE_STRATEGY:naive}
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
