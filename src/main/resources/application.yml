@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: flash-sale-ticketing
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/flashsale}
+    username: ${SPRING_DATASOURCE_USERNAME:flashsale}
+    password: ${SPRING_DATASOURCE_PASSWORD:flashsale}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    org.hibernate.SQL: debug
