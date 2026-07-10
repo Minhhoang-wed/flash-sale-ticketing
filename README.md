@@ -40,6 +40,17 @@ curl -X POST http://localhost:8080/api/orders/1/pay
 
 Đặt vé tuần tự 101 lần → 100 lần đầu HTTP 201, lần 101 HTTP 409 (sold out).
 
+## Chiến lược reserve (đổi qua env `RESERVE_STRATEGY`)
+
+| Giá trị | Cơ chế | Ngày |
+|---|---|---|
+| `naive` | read-check-write, CÓ race condition (demo) | 1 |
+| `pessimistic` | `SELECT ... FOR UPDATE` | 2 |
+| `optimistic` | version + retry 3 lần | 2 |
+| `redis` (mặc định) | Redis `DECR` atomic + compensation | 3 |
+
+Load test: `java scripts/LoadTest.java` (app phải đang chạy). Chi tiết quan sát: `NOTES.md`.
+
 ## ⚠️ Lỗi tiềm ẩn có chủ đích (câu hỏi cuối ngày)
 
 `TicketService.reserve()` làm **read → check → write** không atomic:

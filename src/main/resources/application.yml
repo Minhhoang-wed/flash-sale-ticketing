@@ -5,6 +5,10 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/flashsale}
     username: ${SPRING_DATASOURCE_USERNAME:flashsale}
     password: ${SPRING_DATASOURCE_PASSWORD:flashsale}
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
   jpa:
     hibernate:
       ddl-auto: update
@@ -14,8 +18,9 @@ spring:
         format_sql: true
 
 app:
-  # naive | pessimistic | optimistic
-  reserve-strategy: ${RESERVE_STRATEGY:naive}
+  # naive | pessimistic | optimistic | redis
+  reserve-strategy: ${RESERVE_STRATEGY:redis}
+  event-cache-ttl-seconds: 60
 
 springdoc:
   swagger-ui:

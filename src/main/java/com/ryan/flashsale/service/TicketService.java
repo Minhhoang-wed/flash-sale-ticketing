@@ -1,5 +1,7 @@
 package com.ryan.flashsale.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ryan.flashsale.dto.EventResponse;
 import com.ryan.flashsale.entity.Event;
 import com.ryan.flashsale.entity.Order;
 import com.ryan.flashsale.entity.OrderStatus;
@@ -9,12 +11,15 @@ import com.ryan.flashsale.exception.SoldOutException;
 import com.ryan.flashsale.repository.EventRepository;
 import com.ryan.flashsale.repository.OrderRepository;
 import lombok.Getter;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -26,6 +31,9 @@ public class TicketService {
 
     private final EventRepository eventRepository;
     private final OrderRepository orderRepository;
+    private final StockService stockService;
+    private final StringRedisTemplate redis;
+    private final ObjectMapper objectMapper;
 
     /**
      * Self-injection: gọi this.reservePessimistic() trực tiếp sẽ BYPASS proxy
@@ -33,20 +41,63 @@ public class TicketService {
      */
     private final TicketService self;
 
-    /** naive | pessimistic | optimistic — đổi qua env RESERVE_STRATEGY */
+    /** naive | pessimistic | optimistic | redis — đổi qua env RESERVE_STRATEGY */
     @Getter
-    @Value("${app.reserve-strategy:naive}")
+    @Value("${app.reserve-strategy:redis}")
     private String reserveStrategy;
 
-    /** Đếm số lần optimistic lock bị conflict phải retry (để so sánh Ngày 2) */
+    @Value("${app.event-cache-ttl-seconds:60}")
+    private long eventCacheTtlSeconds;
+
+    /** Đếm số lần optimistic lock bị conflict phải retry (so sánh Ngày 2) */
     private final AtomicLong optimisticRetries = new AtomicLong();
 
     public TicketService(EventRepository eventRepository,
                          OrderRepository orderRepository,
+                         StockService stockService,
+                         StringRedisTemplate redis,
+                         ObjectMapper objectMapper,
                          @Lazy TicketService self) {
         this.eventRepository = eventRepository;
         this.orderRepository = orderRepository;
+        this.stockService = stockService;
+        this.redis = redis;
+        this.objectMapper = objectMapper;
         this.self = self;
+    }
+
+    // ==================== GET EVENT (cache-aside, Ngày 3) ====================
+
+    private static String eventCacheKey(Long id) {
+        return "event:" + id;
+    }
+
+    /**
+     * CACHE-ASIDE: đọc Redis trước → miss thì query DB rồi SET ... EX 60.
+     * Số vé còn lại luôn lấy live từ stock key (DB không còn trừ vé ở pha reserve).
+     */
+    @SneakyThrows
+    public EventResponse getEventResponse(Long eventId) {
+        String cached = redis.opsForValue().get(eventCacheKey(eventId));
+        EventResponse base;
+        if (cached != null) {
+            base = objectMapper.readValue(cached, EventResponse.class);
+        } else {
+            Event event = eventRepository.findById(eventId)
+                    .orElseThrow(() -> new NotFoundException("Event not found: " + eventId));
+            base = EventResponse.from(event);
+            redis.opsForValue().set(eventCacheKey(eventId),
+                    objectMapper.writeValueAsString(base),
+                    Duration.ofSeconds(eventCacheTtlSeconds));
+            log.info("Cache MISS event {} -> cached {}s", eventId, eventCacheTtlSeconds);
+        }
+        Long stock = stockService.get(eventId);
+        return stock == null ? base : base.withRemaining(stock.intValue());
+    }
+
+    /** Invalidation: gọi khi event bị sửa (hiện dùng trong resetDemo). */
+    public void evictEventCache(Long eventId) {
+        redis.delete(eventCacheKey(eventId));
     }
 
     @Transactional(readOnly = true)
@@ -55,18 +106,45 @@ public class TicketService {
                 .orElseThrow(() -> new NotFoundException("Event not found: " + eventId));
     }
 
+    // ==================== RESERVE ====================
+
     public Order reserve(Long eventId, String userId) {
         return switch (reserveStrategy) {
             case "pessimistic" -> self.reservePessimistic(eventId, userId);
             case "optimistic" -> reserveOptimistic(eventId, userId);
+            case "redis" -> reserveRedis(eventId, userId);
             default -> self.reserveNaive(eventId, userId);
         };
     }
 
     /**
-     * CÁCH 0 — NAIVE (Ngày 1, giữ lại để demo "before"):
-     * read → check → write không atomic. 2 request cùng đọc remaining = 1
-     * → cả hai pass check → oversell.
+     * CÁCH 3 — REDIS ATOMIC COUNTER (Ngày 3):
+     * DECR là atomic → không thể có 2 request cùng "thấy còn 1 vé".
+     * DB KHÔNG bị chạm ở pha từ chối; pha thành công DB chỉ ghi đơn.
+     *
+     * DECR trả về < 0  → hết vé: INCR cộng bù (trả lại vé ảo vừa trừ lố) + 409.
+     * DECR trả về >= 0 → giữ chỗ thành công: tạo đơn. Nếu tạo đơn ném exception
+     * → COMPENSATION: INCR trả vé rồi ném tiếp (pattern giống avatar upload).
+     */
+    private Order reserveRedis(Long eventId, String userId) {
+        long remaining = stockService.decrement(eventId);
+        if (remaining < 0) {
+            stockService.increment(eventId);
+            throw new SoldOutException("Event " + eventId + " is sold out");
+        }
+        try {
+            return createOrder(eventId, userId);
+        } catch (RuntimeException e) {
+            stockService.increment(eventId);
+            log.warn("Order creation failed, compensated stock for event {}: {}",
+                    eventId, e.getMessage());
+            throw e;
+        }
+    }
+
+    /**
+     * CÁCH 0 — NAIVE (Ngày 1, giữ để demo):
+     * read → check → write không atomic → oversell khi concurrent.
      */
     @Transactional
     public Order reserveNaive(Long eventId, String userId) {
@@ -84,9 +162,8 @@ public class TicketService {
     }
 
     /**
-     * CÁCH 1 — PESSIMISTIC LOCK:
-     * SELECT ... FOR UPDATE giữ row lock đến hết transaction.
-     * Mọi request khác phải XẾP HÀNG chờ → read-check-write trở thành atomic.
+     * CÁCH 1 — PESSIMISTIC LOCK (Ngày 2): SELECT ... FOR UPDATE serialize
+     * read-check-write trên row event.
      */
     @Transactional
     public Order reservePessimistic(Long eventId, String userId) {
@@ -102,10 +179,7 @@ public class TicketService {
     }
 
     /**
-     * CÁCH 2 — OPTIMISTIC LOCK (thủ công, retry tối đa 3 lần):
-     * Không lock khi đọc; lúc ghi mới check version. Conflict → retry.
-     * KHÔNG có @Transactional bao ngoài: mỗi attempt là 1 transaction riêng
-     * để lần đọc sau thấy version mới nhất.
+     * CÁCH 2 — OPTIMISTIC LOCK (Ngày 2): version + retry tối đa 3 lần.
      */
     private Order reserveOptimistic(Long eventId, String userId) {
         final int maxAttempts = 3;
@@ -121,8 +195,6 @@ public class TicketService {
             if (updated == 1) {
                 return createOrder(eventId, userId);
             }
-
-            // version đã bị thread khác đổi → conflict
             optimisticRetries.incrementAndGet();
             log.debug("Optimistic conflict on event {} (attempt {}/{})", eventId, attempt, maxAttempts);
             sleepBriefly();
@@ -130,6 +202,8 @@ public class TicketService {
         throw new SoldOutException(
                 "Could not reserve after " + maxAttempts + " attempts (contention quá cao)");
     }
+
+    // ==================== PAY ====================
 
     @Transactional
     public Order pay(Long orderId) {
@@ -144,7 +218,7 @@ public class TicketService {
         return orderRepository.save(order);
     }
 
-    // ---- debug/demo helpers ----
+    // ==================== debug/demo helpers ====================
 
     public long getOptimisticRetries() {
         return optimisticRetries.get();
@@ -156,9 +230,11 @@ public class TicketService {
         eventRepository.findAll().forEach(e -> {
             e.setRemainingTickets(e.getTotalTickets());
             e.setVersion(0);
+            evictEventCache(e.getId());
         });
         optimisticRetries.set(0);
-        log.info("Demo reset: stock refilled, orders wiped, metrics zeroed");
+        stockService.syncFromDb();
+        log.info("Demo reset: stock refilled (DB + Redis), orders wiped, cache evicted");
     }
 
     private Order createOrder(Long eventId, String userId) {

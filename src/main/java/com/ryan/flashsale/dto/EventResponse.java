@@ -20,4 +20,9 @@ public record EventResponse(
                 event.getStartSaleAt()
         );
     }
+
+    /** Ghi đè số vé còn lại bằng giá trị live từ Redis stock key. */
+    public EventResponse withRemaining(int remaining) {
+        return new EventResponse(id, name, totalTickets, remaining, startSaleAt);
+    }
 }

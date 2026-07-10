@@ -16,17 +16,32 @@ services:
       timeout: 3s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: flashsale-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   app:
     build: .
     container_name: flashsale-app
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashsale
       SPRING_DATASOURCE_USERNAME: flashsale
       SPRING_DATASOURCE_PASSWORD: flashsale
-      RESERVE_STRATEGY: ${RESERVE_STRATEGY:-naive}
+      SPRING_DATA_REDIS_HOST: redis
+      # naive | pessimistic | optimistic | redis
+      RESERVE_STRATEGY: ${RESERVE_STRATEGY:-redis}
     ports:
       - "8080:8080"
 

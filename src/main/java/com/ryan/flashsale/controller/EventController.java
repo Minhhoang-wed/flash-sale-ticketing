@@ -19,9 +19,9 @@ public class EventController {
     private final TicketService ticketService;
 
     @GetMapping("/{id}")
-    @Operation(summary = "Thông tin sự kiện + số vé còn lại")
+    @Operation(summary = "Thông tin sự kiện + số vé còn lại (cache-aside qua Redis)")
     public EventResponse getEvent(@PathVariable Long id) {
-        return EventResponse.from(ticketService.getEvent(id));
+        return ticketService.getEventResponse(id);
     }
 
     @PostMapping("/{id}/reserve")
