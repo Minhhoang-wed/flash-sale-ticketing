@@ -21,6 +21,11 @@ public class GlobalExceptionHandler {
         return body(HttpStatus.CONFLICT, ex.getMessage());
     }
 
+    @ExceptionHandler(AlreadyPurchasedException.class)
+    public ResponseEntity<Map<String, Object>> handleAlreadyPurchased(AlreadyPurchasedException ex) {
+        return body(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
     @ExceptionHandler(InvalidOrderStateException.class)
     public ResponseEntity<Map<String, Object>> handleInvalidState(InvalidOrderStateException ex) {
         return body(HttpStatus.CONFLICT, ex.getMessage());

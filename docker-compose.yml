@@ -62,6 +62,7 @@ services:
       # Hạn giữ chỗ (giây) — demo unhappy path: đặt 60
       RESERVATION_TTL_SECONDS: ${RESERVATION_TTL_SECONDS:-600}
       EXPIRE_SCAN_MS: ${EXPIRE_SCAN_MS:-30000}
+      RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-5}
     ports:
       - "8080:8080"
 

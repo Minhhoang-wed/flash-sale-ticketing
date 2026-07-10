@@ -40,8 +40,8 @@ public class ReservationExpiryJob {
             int updated = orderRepository.markExpiredIfReserved(
                     order.getId(), OrderStatus.RESERVED, OrderStatus.EXPIRED);
             if (updated == 1) {
-                // Thắng cuộc đua với pay → an toàn trả vé về kho
-                stockService.increment(order.getEventId());
+                // Thắng cuộc đua với pay → trả vé về kho + cho phép user mua lại
+                stockService.returnTicket(order.getEventId(), order.getUserId());
                 expired++;
             }
             // updated == 0: pay vừa thắng trước → bỏ qua, không trả vé

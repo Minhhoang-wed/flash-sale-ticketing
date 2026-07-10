@@ -32,6 +32,8 @@ app:
   reservation-ttl-seconds: ${RESERVATION_TTL_SECONDS:600}
   # Chu kỳ quét đơn quá hạn
   expire-scan-delay-ms: ${EXPIRE_SCAN_MS:30000}
+  # Rate limit (Ngày 6): tối đa N request/giây/user vào /reserve
+  rate-limit-per-second: ${RATE_LIMIT_PER_SECOND:5}
 
 springdoc:
   swagger-ui:

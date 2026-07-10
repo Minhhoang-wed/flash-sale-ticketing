@@ -8,6 +8,7 @@ import com.ryan.flashsale.dto.ReserveResult;
 import com.ryan.flashsale.entity.Event;
 import com.ryan.flashsale.entity.Order;
 import com.ryan.flashsale.entity.OrderStatus;
+import com.ryan.flashsale.exception.AlreadyPurchasedException;
 import com.ryan.flashsale.exception.InvalidOrderStateException;
 import com.ryan.flashsale.exception.NotFoundException;
 import com.ryan.flashsale.exception.SoldOutException;
@@ -147,9 +148,13 @@ public class TicketService {
      * → COMPENSATION: INCR trả vé rồi ném tiếp (pattern giống avatar upload).
      */
     private ReserveResult reserveRedis(Long eventId, String userId) {
-        long remaining = stockService.decrement(eventId);
-        if (remaining < 0) {
-            stockService.increment(eventId);
+        // Ngày 6: Lua script — check 1-vé/người + stock + DECR + SADD, atomic cả khối
+        long result = stockService.reserveAtomic(eventId, userId);
+        if (result == StockService.RESERVE_ALREADY_PURCHASED) {
+            throw new AlreadyPurchasedException(
+                    "User " + userId + " already reserved a ticket for event " + eventId);
+        }
+        if (result == StockService.RESERVE_SOLD_OUT) {
             throw new SoldOutException("Event " + eventId + " is sold out");
         }
         // Ngày 4: DB không được chạm ở pha reserve nữa —
@@ -161,7 +166,7 @@ public class TicketService {
             rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE, RabbitConfig.ROUTING_KEY, msg);
             return new ReserveResult(reservationId, null);
         } catch (RuntimeException e) {
-            stockService.increment(eventId);
+            stockService.returnTicket(eventId, userId);
             log.warn("Publish failed, compensated stock for event {}: {}", eventId, e.getMessage());
             throw e;
         }

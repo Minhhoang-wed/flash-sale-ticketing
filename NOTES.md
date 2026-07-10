@@ -209,3 +209,52 @@ Race giữa pay và expire: cả hai đều là conditional UPDATE trên status,
 lock cho đúng một bên thắng, bên thua nhận 0 rows affected và xử lý theo —
 nên không tồn tại case vừa PAID vừa EXPIRED, cũng không có chuyện hoàn kho
 vé đã bán."
+
+---
+
+# NOTES — Ngày 6: Lua script + Rate limiting
+
+## Câu chuyện "nâng cấp DECR → Lua" (kể khi phỏng vấn)
+
+Ngày 3, atomic của mình là MỘT LỆNH: DECR. Đủ dùng khi logic chỉ có "trừ vé".
+Ngày 6 thêm rule "mỗi người 1 vé" → logic thành: check đã-mua → check stock →
+trừ vé → ghi nhận người mua. Bốn bước, nếu viết bằng 4 lệnh Redis riêng thì
+atomic TỪNG LỆNH nhưng không atomic CẢ KHỐI — khe hở giữa các lệnh lại mở ra,
+đúng bản chất lỗi oversell Ngày 2 quay về, chỉ khác tầng:
+
+```
+SISMEMBER purchased user   → 0 (chưa mua)     [request A]
+SISMEMBER purchased user   → 0 (chưa mua)     [request B — chen vào!]
+DECR stock                                     [A]
+DECR stock                                     [B] → user mua được 2 vé
+SADD purchased user                            [A]
+SADD purchased user                            [B]
+```
+
+Lua script giải quyết: Redis thực thi TOÀN BỘ script như một lệnh duy nhất
+(single-threaded, không lệnh nào của client khác chen vào giữa) → check-then-act
+nằm trọn trong server. Bài học xuyên suốt project: **ranh giới atomic phải bao
+trùm toàn bộ khối check-then-act** — bằng row lock (Ngày 2), bằng lệnh đơn
+(Ngày 3), hay bằng Lua (Ngày 6) khi logic dài hơn một lệnh.
+
+## Rate limiting
+
+`INCR req:{userId}:{epochGiây}` + `EXPIRE 1` — fixed window 1 giây.
+Quá N (mặc định 5) → 429. Interceptor chỉ gắn vào `/api/events/*/reserve`.
+
+Tự thú vị: INCR + EXPIRE cũng là 2 lệnh — nếu app crash giữa chừng, key sống
+mãi không TTL. Khe hở này vô hại ở đây (key theo giây, rò rỉ vài key là cùng)
+nhưng production chuẩn sẽ... gộp bằng Lua. Đúng vòng lặp bài học của ngày.
+
+## Trả lời câu hỏi cuối ngày
+
+**Vì sao check-đã-mua rồi mới DECR bằng 2 lệnh riêng là sai?**
+Vì giữa SISMEMBER và DECR có khe hở: 2 request của cùng user cùng qua bước
+check (cùng thấy "chưa mua") rồi cùng DECR → 1 user 2 vé. Check-then-act
+tách rời = race condition, bất kể tầng nào (SQL, Redis, hay RAM).
+
+**Lua giải quyết thế nào?**
+Gói cả khối vào 1 script; Redis chạy script nguyên tử — không interleaving.
+Kết quả trả về (-2/-1/số còn lại) cho app biết chính xác chuyện gì xảy ra
+mà không cần đọc lại. Lưu ý trade-off: script phải NGẮN (Redis single-threaded,
+script dài = chặn cả server) và không nên có side-effect ngoài Redis.

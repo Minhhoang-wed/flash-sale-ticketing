@@ -17,6 +17,8 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     long countByEventIdAndStatusIn(Long eventId, Collection<OrderStatus> statuses);
 
+    List<Order> findByEventIdAndStatusIn(Long eventId, Collection<OrderStatus> statuses);
+
     boolean existsByReservationId(String reservationId);
 
     Optional<Order> findByReservationId(String reservationId);
