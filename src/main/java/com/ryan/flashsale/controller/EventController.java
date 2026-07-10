@@ -1,7 +1,8 @@
 package com.ryan.flashsale.controller;
 
 import com.ryan.flashsale.dto.EventResponse;
-import com.ryan.flashsale.dto.OrderResponse;
+import com.ryan.flashsale.dto.ReserveResponse;
+import com.ryan.flashsale.dto.ReserveResult;
 import com.ryan.flashsale.service.TicketService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,11 +26,19 @@ public class EventController {
     }
 
     @PostMapping("/{id}/reserve")
-    @Operation(summary = "Giữ chỗ 1 vé (naive - Ngày 1)")
-    public ResponseEntity<OrderResponse> reserve(
+    @Operation(summary = "Giữ chỗ 1 vé. Strategy redis → 202 + reservationId (poll đơn sau); "
+            + "strategy khác → 201 + đơn tạo ngay")
+    public ResponseEntity<ReserveResponse> reserve(
             @PathVariable Long id,
             @RequestHeader("X-User-Id") String userId) {
-        OrderResponse order = OrderResponse.from(ticketService.reserve(id, userId));
-        return ResponseEntity.status(HttpStatus.CREATED).body(order);
+        ReserveResult result = ticketService.reserve(id, userId);
+        if (result.isAsync()) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED)
+                    .body(new ReserveResponse(result.reservationId(), null, "PENDING"));
+        }
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(new ReserveResponse(result.reservationId(),
+                        result.order().getId(),
+                        result.order().getStatus().name()));
     }
 }

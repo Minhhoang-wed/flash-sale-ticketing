@@ -111,3 +111,57 @@ Giá trị trả về của DECR cho mỗi client một con số DUY NHẤT (99,
 - Production thật: Redis Sentinel/Cluster để failover; nhưng câu trả lời phỏng
   vấn quan trọng nhất là: **hệ thống phải fail về phía an toàn (không oversell)
   và có cách rebuild state từ nguồn sự thật.**
+
+---
+
+# NOTES — Ngày 4: RabbitMQ + Idempotency
+
+## Kiến trúc
+
+```
+Client ──POST /reserve──> App ──DECR──> Redis
+                            │ (còn vé)
+                            ├─ publish ReservationMessage ──> reservation.exchange
+                            │                                      │ (reservation.created)
+                            └─ 202 + reservationId            reservation.queue
+                                                                    │
+Client ──GET /orders/by-reservation/{id}──> DB <── consumer @RabbitListener
+                                                    (tạo Order RESERVED)
+```
+
+- API chỉ làm 2 việc nhẹ: DECR + publish → trả 202 trong vài chục ms.
+- Ghi đơn (INSERT) chạy nền ở consumer. Consumer tắt → message chờ trong queue,
+  bật lên → xử lý tiếp (không mất đơn).
+- Client poll `GET /api/orders/by-reservation/{reservationId}` (404 = đang xử lý).
+
+## Demo DoD
+
+1. `CONSUMER_ENABLED=false` + restart app → reserve vẫn 202, message đọng trong
+   queue (xem http://localhost:15672, guest/guest, tab Queues).
+2. Bật lại consumer (`CONSUMER_ENABLED=true` + restart) → queue tụt về 0, đơn xuất hiện trong DB.
+3. Idempotency: web UI → Queues → reservation.queue → Publish message, dán cùng 1
+   JSON 2 lần (properties: content_type = application/json):
+   `{"reservationId":"test-dup-1","userId":"u1","eventId":1,"reservedAt":"2026-07-10T00:00:00Z"}`
+   → DB chỉ có 1 đơn, log consumer in "Duplicate message skipped".
+
+## Trả lời câu hỏi cuối ngày
+
+**Message bị giao 2 lần thì sao? At-least-once là gì?**
+RabbitMQ mặc định đảm bảo at-least-once: message chắc chắn được giao ÍT NHẤT
+1 lần, nhưng có thể NHIỀU hơn — ví dụ consumer xử lý xong nhưng chết trước khi
+ack → broker không biết đã xử lý → giao lại cho consumer khác. Exactly-once
+qua network là bất khả thi trong thực tế (chi phí cực đắt), nên nguyên tắc là:
+**broker đảm bảo at-least-once, consumer tự đảm bảo idempotent** — xử lý N lần
+cho kết quả y như 1 lần.
+
+**Em xử lý idempotent thế nào?**
+Khóa tự nhiên của nghiệp vụ là `reservationId` (UUID sinh 1 lần tại API).
+Chốt chặn: UNIQUE constraint trên `orders.reservation_id` — tầng DB, không thể
+lách kể cả 2 consumer chạy song song. Consumer check-exists trước cho nhẹ,
+nhưng cái quyết định là constraint: bắt `DataIntegrityViolationException` →
+log + bỏ qua êm (không ném lại — ném lại là message bị requeue, lặp vô hạn).
+
+**Liên hệ VNPay IPN (AutoWash Pro):** IPN cũng là at-least-once — VNPay retry
+callback khi chưa nhận 200. Xử lý y hệt: check `vnp_TxnRef` đã xử lý chưa,
+rồi mới cộng tiền/đổi trạng thái. Một pattern, hai bối cảnh — điểm ăn tiền
+khi phỏng vấn.

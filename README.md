@@ -20,8 +20,9 @@ docker compose up --build
 | Method | Endpoint | Mô tả |
 |---|---|---|
 | GET | `/api/events/{id}` | Thông tin sự kiện + vé còn lại |
-| POST | `/api/events/{id}/reserve` | Giữ chỗ 1 vé (header `X-User-Id` bắt buộc) |
+| POST | `/api/events/{id}/reserve` | Giữ chỗ 1 vé (header `X-User-Id`). Strategy `redis` → 202 + reservationId (async qua RabbitMQ) |
 | POST | `/api/orders/{id}/pay` | RESERVED → PAID |
+| GET | `/api/orders/by-reservation/{reservationId}` | Poll trạng thái đơn (404 = đang xử lý) |
 
 Ví dụ:
 

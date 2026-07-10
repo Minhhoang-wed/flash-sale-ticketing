@@ -1,7 +1,10 @@
 package com.ryan.flashsale.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ryan.flashsale.config.RabbitConfig;
 import com.ryan.flashsale.dto.EventResponse;
+import com.ryan.flashsale.dto.ReservationMessage;
+import com.ryan.flashsale.dto.ReserveResult;
 import com.ryan.flashsale.entity.Event;
 import com.ryan.flashsale.entity.Order;
 import com.ryan.flashsale.entity.OrderStatus;
@@ -15,6 +18,8 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +39,8 @@ public class TicketService {
     private final StockService stockService;
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
+    private final RabbitTemplate rabbitTemplate;
+    private final AmqpAdmin amqpAdmin;
 
     /**
      * Self-injection: gọi this.reservePessimistic() trực tiếp sẽ BYPASS proxy
@@ -57,12 +64,16 @@ public class TicketService {
                          StockService stockService,
                          StringRedisTemplate redis,
                          ObjectMapper objectMapper,
+                         RabbitTemplate rabbitTemplate,
+                         AmqpAdmin amqpAdmin,
                          @Lazy TicketService self) {
         this.eventRepository = eventRepository;
         this.orderRepository = orderRepository;
         this.stockService = stockService;
         this.redis = redis;
         this.objectMapper = objectMapper;
+        this.rabbitTemplate = rabbitTemplate;
+        this.amqpAdmin = amqpAdmin;
         this.self = self;
     }
 
@@ -108,13 +119,17 @@ public class TicketService {
 
     // ==================== RESERVE ====================
 
-    public Order reserve(Long eventId, String userId) {
+    public ReserveResult reserve(Long eventId, String userId) {
         return switch (reserveStrategy) {
-            case "pessimistic" -> self.reservePessimistic(eventId, userId);
-            case "optimistic" -> reserveOptimistic(eventId, userId);
+            case "pessimistic" -> sync(self.reservePessimistic(eventId, userId));
+            case "optimistic" -> sync(reserveOptimistic(eventId, userId));
             case "redis" -> reserveRedis(eventId, userId);
-            default -> self.reserveNaive(eventId, userId);
+            default -> sync(self.reserveNaive(eventId, userId));
         };
+    }
+
+    private static ReserveResult sync(Order order) {
+        return new ReserveResult(order.getReservationId(), order);
     }
 
     /**
@@ -126,18 +141,23 @@ public class TicketService {
      * DECR trả về >= 0 → giữ chỗ thành công: tạo đơn. Nếu tạo đơn ném exception
      * → COMPENSATION: INCR trả vé rồi ném tiếp (pattern giống avatar upload).
      */
-    private Order reserveRedis(Long eventId, String userId) {
+    private ReserveResult reserveRedis(Long eventId, String userId) {
         long remaining = stockService.decrement(eventId);
         if (remaining < 0) {
             stockService.increment(eventId);
             throw new SoldOutException("Event " + eventId + " is sold out");
         }
+        // Ngày 4: DB không được chạm ở pha reserve nữa —
+        // chỉ publish message, consumer sẽ ghi đơn ở background.
+        String reservationId = UUID.randomUUID().toString();
         try {
-            return createOrder(eventId, userId);
+            ReservationMessage msg = new ReservationMessage(
+                    reservationId, userId, eventId, Instant.now());
+            rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE, RabbitConfig.ROUTING_KEY, msg);
+            return new ReserveResult(reservationId, null);
         } catch (RuntimeException e) {
             stockService.increment(eventId);
-            log.warn("Order creation failed, compensated stock for event {}: {}",
-                    eventId, e.getMessage());
+            log.warn("Publish failed, compensated stock for event {}: {}", eventId, e.getMessage());
             throw e;
         }
     }
@@ -233,8 +253,13 @@ public class TicketService {
             evictEventCache(e.getId());
         });
         optimisticRetries.set(0);
+        try {
+            amqpAdmin.purgeQueue(RabbitConfig.QUEUE, false);
+        } catch (RuntimeException e) {
+            log.warn("Could not purge queue: {}", e.getMessage());
+        }
         stockService.syncFromDb();
-        log.info("Demo reset: stock refilled (DB + Redis), orders wiped, cache evicted");
+        log.info("Demo reset: stock refilled (DB + Redis), orders wiped, cache + queue purged");
     }
 
     private Order createOrder(Long eventId, String userId) {

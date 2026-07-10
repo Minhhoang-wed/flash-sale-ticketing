@@ -9,6 +9,11 @@ spring:
     redis:
       host: ${SPRING_DATA_REDIS_HOST:localhost}
       port: ${SPRING_DATA_REDIS_PORT:6379}
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: guest
+    password: guest
   jpa:
     hibernate:
       ddl-auto: update
@@ -21,6 +26,8 @@ app:
   # naive | pessimistic | optimistic | redis
   reserve-strategy: ${RESERVE_STRATEGY:redis}
   event-cache-ttl-seconds: 60
+  # false = consumer không start -> message nằm chờ trong queue (demo Ngày 4)
+  consumer-enabled: ${CONSUMER_ENABLED:true}
 
 springdoc:
   swagger-ui:

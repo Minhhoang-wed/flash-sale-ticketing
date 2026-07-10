@@ -57,7 +57,8 @@ public class LoadTest {
                             .POST(HttpRequest.BodyPublishers.noBody())
                             .build();
                     int code = client.send(req, HttpResponse.BodyHandlers.ofString()).statusCode();
-                    if (code == 201) created.incrementAndGet();
+                    // 201 = sync (naive/pessimistic/optimistic), 202 = async qua queue (redis)
+                    if (code == 201 || code == 202) created.incrementAndGet();
                     else if (code == 409) conflict.incrementAndGet();
                     else error.incrementAndGet();
                 } catch (Exception e) {
@@ -75,7 +76,8 @@ public class LoadTest {
         long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
         pool.shutdownNow();
 
-        // 3. Kết quả
+        // 3. Kết quả (chờ 3s cho consumer ghi nốt đơn từ queue vào DB)
+        Thread.sleep(3000);
         String eventBody = client.send(
                 HttpRequest.newBuilder(URI.create(base + "/api/events/" + eventId)).GET().build(),
                 HttpResponse.BodyHandlers.ofString()).body();
@@ -85,7 +87,7 @@ public class LoadTest {
 
         System.out.println();
         System.out.println("===== KẾT QUẢ (" + threads + " request đồng thời, " + elapsedMs + " ms) =====");
-        System.out.println("201 Created (giữ chỗ OK) : " + created.get());
+        System.out.println("201/202 (giữ chỗ OK)     : " + created.get());
         System.out.println("409 Conflict (hết vé)    : " + conflict.get());
         System.out.println("Lỗi khác                 : " + error.get());
         System.out.println("Event sau test           : " + eventBody);

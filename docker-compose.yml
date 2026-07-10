@@ -27,6 +27,18 @@ services:
       timeout: 3s
       retries: 10
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: flashsale-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # Web UI: http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   app:
     build: .
     container_name: flashsale-app
@@ -35,13 +47,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashsale
       SPRING_DATASOURCE_USERNAME: flashsale
       SPRING_DATASOURCE_PASSWORD: flashsale
       SPRING_DATA_REDIS_HOST: redis
+      SPRING_RABBITMQ_HOST: rabbitmq
       # naive | pessimistic | optimistic | redis
       RESERVE_STRATEGY: ${RESERVE_STRATEGY:-redis}
+      # false = tắt consumer để demo message chờ trong queue
+      CONSUMER_ENABLED: ${CONSUMER_ENABLED:-true}
     ports:
       - "8080:8080"
 
