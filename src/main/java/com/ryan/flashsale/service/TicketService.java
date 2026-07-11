@@ -275,8 +275,9 @@ public class TicketService {
         optimisticRetries.set(0);
         try {
             amqpAdmin.purgeQueue(RabbitConfig.QUEUE, false);
+            amqpAdmin.purgeQueue(RabbitConfig.DLQ, false);
         } catch (RuntimeException e) {
-            log.warn("Could not purge queue: {}", e.getMessage());
+            log.warn("Could not purge queues: {}", e.getMessage());
         }
         stockService.syncFromDb();
         log.info("Demo reset: stock refilled (DB + Redis), orders wiped, cache + queue purged");

@@ -258,3 +258,42 @@ Gói cả khối vào 1 script; Redis chạy script nguyên tử — không inte
 Kết quả trả về (-2/-1/số còn lại) cho app biết chính xác chuyện gì xảy ra
 mà không cần đọc lại. Lưu ý trade-off: script phải NGẮN (Redis single-threaded,
 script dài = chặn cả server) và không nên có side-effect ngoài Redis.
+
+---
+
+# NOTES — Ngày 7: Retry + DLQ
+
+## Cấu hình
+
+- **Retry in-memory** (Spring, không phải broker): 3 lần, backoff 1s → 2s.
+  Message chưa bị trả về broker trong lúc retry — consumer giữ và thử lại.
+- **Hết retry** → `default-requeue-rejected: false` → basic.reject(requeue=false)
+  → queue chính có `x-dead-letter-exchange` → broker chuyển message sang
+  `reservation.dlx` → nằm gọn trong `reservation.dlq`.
+- Demo: reserve với `X-User-Id: poison` → consumer cố tình throw → xem log thấy
+  3 attempt cách nhau 1s/2s → message hiện trong DLQ (web UI + `/api/debug/metrics`
+  trường `dlqMessages`).
+
+## ⚠️ Vận hành: đổi args của queue đã tồn tại
+
+Queue `reservation.queue` cũ (Ngày 4) không có DLX args. RabbitMQ KHÔNG cho
+redeclare queue với args khác → `PRECONDITION_FAILED`. Fix: xóa container
+rabbitmq (docker compose down) để queue được tạo mới. Bài học thật về vận hành:
+thay đổi topology queue trong production phải có migration plan.
+
+## Trả lời câu hỏi cuối ngày
+
+**DLQ để làm gì?**
+Là "bệnh viện" cho message hỏng: message fail lặp lại (bug parse, data không
+hợp lệ, dependency chết lâu) được cách ly khỏi queue chính, giữ nguyên vẹn
+payload + header (kèm lý do chết trong x-death) để người vận hành xem, sửa,
+và replay lại sau khi fix bug.
+
+**Không có DLQ thì chuyện gì xảy ra?** Hai kịch bản, đều tệ:
+1. `requeue = true` (mặc định): message độc quay lại ĐẦU queue → consumer xử lý
+   fail → requeue → fail... vòng lặp vô hạn chiếm CPU, message tốt phía sau bị
+   **head-of-line blocking** — một message hỏng làm tê liệt cả pipeline.
+2. `requeue = false` mà không có DLX: broker DROP message — mất dữ liệu im lặng,
+   khách giữ chỗ xong không bao giờ có đơn, không dấu vết để điều tra.
+
+DLQ là đường thoát thứ ba: không kẹt, không mất — trạng thái "chờ người xử lý".

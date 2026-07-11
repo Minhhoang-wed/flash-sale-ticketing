@@ -14,6 +14,18 @@ spring:
     port: ${SPRING_RABBITMQ_PORT:5672}
     username: guest
     password: guest
+    listener:
+      simple:
+        # Ngày 7: retry in-memory 3 lần, delay 1s -> 2s -> 4s
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1s
+          multiplier: 2.0
+          max-interval: 10s
+        # Hết retry -> reject KHÔNG requeue -> broker đẩy sang DLX -> DLQ.
+        # (true = requeue vô hạn: message độc quay lại đầu queue mãi mãi)
+        default-requeue-rejected: false
   jpa:
     hibernate:
       ddl-auto: update

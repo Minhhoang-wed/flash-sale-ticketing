@@ -32,6 +32,13 @@ public class ReservationConsumer {
 
     @RabbitListener(queues = RabbitConfig.QUEUE, autoStartup = "${app.consumer-enabled:true}")
     public void onReservationCreated(ReservationMessage msg) {
+        // Ngày 7: payload "độc" để demo retry + DLQ —
+        // reserve với X-User-Id: poison -> fail 3 lần (1s, 2s) -> rơi vào DLQ
+        if ("poison".equals(msg.userId())) {
+            log.warn("Poison message received (attempt will fail): {}", msg.reservationId());
+            throw new IllegalStateException("Poison message demo - always fails");
+        }
+
         // Check-trước cho đường trùng phổ biến (đỡ tốn 1 insert fail + stacktrace)
         if (orderRepository.existsByReservationId(msg.reservationId())) {
             log.info("Duplicate message skipped (already exists): reservationId={}", msg.reservationId());

@@ -1,5 +1,6 @@
 package com.ryan.flashsale.controller;
 
+import com.ryan.flashsale.config.RabbitConfig;
 import com.ryan.flashsale.repository.EventRepository;
 import com.ryan.flashsale.repository.OrderRepository;
 import com.ryan.flashsale.service.StockService;
@@ -25,6 +26,7 @@ public class DebugController {
     private final OrderRepository orderRepository;
     private final EventRepository eventRepository;
     private final StockService stockService;
+    private final org.springframework.amqp.core.AmqpAdmin amqpAdmin;
 
     @PostMapping("/reset")
     @Operation(summary = "Reset stock (DB + Redis), xóa hết order, xóa cache, reset metrics")
@@ -42,7 +44,18 @@ public class DebugController {
                 "strategy", ticketService.getReserveStrategy(),
                 "totalOrders", orderRepository.count(),
                 "optimisticRetries", ticketService.getOptimisticRetries(),
-                "redisStock", redisStock
+                "redisStock", redisStock,
+                "dlqMessages", dlqMessageCount()
         );
+    }
+
+    /** Ngày 7 (tuỳ chọn): số message đang nằm trong DLQ. */
+    private long dlqMessageCount() {
+        var props = amqpAdmin.getQueueProperties(RabbitConfig.DLQ);
+        if (props == null) {
+            return -1; // DLQ chưa tồn tại
+        }
+        Object count = props.get("QUEUE_MESSAGE_COUNT");
+        return count instanceof Number n ? n.longValue() : -1;
     }
 }
