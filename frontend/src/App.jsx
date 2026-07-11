@@ -185,6 +185,7 @@ export default function App() {
         logs={logs}
         onChangeUser={changeUser}
         onAfterReset={afterDemoReset}
+        onRefreshEvent={refresh}
         onRequest={logRequest}
       />
       <Toast toast={toast} onClose={() => setToast(null)} />

@@ -10,10 +10,12 @@ function statusTone(status) {
   return 'text-zinc-300'
 }
 
-export default function DebugPanel({ userId, logs, onChangeUser, onAfterReset, onRequest }) {
+export default function DebugPanel({ userId, logs, onChangeUser, onAfterReset, onRefreshEvent, onRequest }) {
   const [open, setOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [spamming, setSpamming] = useState(false)
+  const [crowding, setCrowding] = useState(false)
+  const [crowdInfo, setCrowdInfo] = useState(null)
   const [results, setResults] = useState(null)
   const [error, setError] = useState(null)
 
@@ -61,6 +63,47 @@ export default function DebugPanel({ userId, logs, onChangeUser, onAfterReset, o
 
     setResults(nextResults)
     setSpamming(false)
+  }
+
+  const handleCrowd = async () => {
+    setCrowding(true)
+    setError(null)
+    setResults(null)
+    setCrowdInfo(null)
+
+    const runId = Date.now().toString(36)
+    const startedAt = performance.now()
+    // 200 NGƯỜI KHÁC NHAU tranh vé cùng lúc (khác nút Spam: 1 user, 10 request)
+    const requests = Array.from({ length: 200 }, (_, i) =>
+      reserveEvent(1, `crowd-${runId}-${i + 1}`, { onRequest }),
+    )
+    const settled = await Promise.allSettled(requests)
+    const elapsedMs = Math.round(performance.now() - startedAt)
+
+    const nextResults = { ...EMPTY_RESULTS }
+    settled.forEach((result) => {
+      const status =
+        result.status === 'fulfilled'
+          ? result.value.status
+          : result.reason instanceof ApiError
+            ? result.reason.status
+            : 0
+      if (status === 202 || status === 409 || status === 429) {
+        nextResults[status] += 1
+      } else {
+        nextResults.other += 1
+      }
+    })
+
+    setResults(nextResults)
+    setCrowdInfo({ elapsedMs })
+    setCrowding(false)
+    // Cập nhật stock bar ngay, khỏi chờ chu kỳ poll kế tiếp
+    try {
+      await onRefreshEvent?.()
+    } catch {
+      /* ignore */
+    }
   }
 
   if (!open) {
@@ -112,7 +155,7 @@ export default function DebugPanel({ userId, logs, onChangeUser, onAfterReset, o
           <button
             type="button"
             onClick={handleReset}
-            disabled={resetting || spamming}
+            disabled={resetting || spamming || crowding}
             className="debug-danger-button"
           >
             {resetting ? 'Đang reset...' : 'Reset demo'}
@@ -120,16 +163,27 @@ export default function DebugPanel({ userId, logs, onChangeUser, onAfterReset, o
           <button
             type="button"
             onClick={handleSpam}
-            disabled={spamming || resetting}
+            disabled={spamming || resetting || crowding}
             className="debug-primary-button"
           >
             {spamming ? 'Đang gửi...' : 'Spam 10 request'}
           </button>
         </div>
 
+        <button
+          type="button"
+          onClick={handleCrowd}
+          disabled={crowding || spamming || resetting}
+          className="mt-2 w-full rounded-xl bg-gradient-to-r from-red-500 to-orange-500 px-4 py-3 text-sm font-black uppercase tracking-wide text-white shadow-lg transition hover:brightness-110 disabled:opacity-50"
+        >
+          {crowding ? '🔥 200 người đang tranh vé...' : '🔥 Giả lập 200 người mua'}
+        </button>
+
         {results && (
           <section className="mt-4">
-            <p className="debug-label">Kết quả lần chạy gần nhất</p>
+            <p className="debug-label">
+              Kết quả lần chạy gần nhất{crowdInfo ? ` — 200 user / ${crowdInfo.elapsedMs}ms` : ''}
+            </p>
             <div className="mt-2 grid grid-cols-3 gap-2">
               {[
                 ['202', results[202], 'text-emerald-300'],
