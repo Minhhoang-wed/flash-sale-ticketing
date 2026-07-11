@@ -117,12 +117,6 @@ public class TicketService {
         redis.delete(eventCacheKey(eventId));
     }
 
-    @Transactional(readOnly = true)
-    public Event getEvent(Long eventId) {
-        return eventRepository.findById(eventId)
-                .orElseThrow(() -> new NotFoundException("Event not found: " + eventId));
-    }
-
     // ==================== RESERVE ====================
 
     public ReserveResult reserve(Long eventId, String userId) {
