@@ -15,6 +15,18 @@ docker compose up --build
 - Swagger UI: http://localhost:8080/swagger-ui.html
 - App tự seed 1 event 100 vé khi khởi động (DataSeeder).
 
+## Frontend
+
+Giao diện React + Vite nằm trong thư mục `frontend/`. Sau khi backend đã chạy:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Mở http://localhost:5173. Hướng dẫn demo và kiểm tra chi tiết: [`frontend/README.md`](frontend/README.md).
+
 ## API
 
 | Method | Endpoint | Mô tả |
