@@ -297,3 +297,46 @@ và replay lại sau khi fix bug.
    khách giữ chỗ xong không bao giờ có đơn, không dấu vết để điều tra.
 
 DLQ là đường thoát thứ ba: không kẹt, không mất — trạng thái "chờ người xử lý".
+
+---
+
+# NOTES — Ngày 8: Testcontainers + k6 (số liệu cho CV)
+
+## Testcontainers
+
+- `AbstractIntegrationTest`: Postgres 16 + Redis 7 + RabbitMQ thật, kéo lên
+  song song bằng `Startables.deepStart`, nối vào Spring qua `@DynamicPropertySource`.
+- 2 test class × 2 chiến lược (`redis`, `pessimistic`) — cùng 1 bài: 200 user
+  đồng thời tranh 100 vé, assert đúng 100 thành công + 100 đơn DB, 0 oversell.
+- Chạy: `./mvnw verify` (chỉ cần JDK + Docker; *IT chạy ở phase integration-test).
+
+## Kết quả k6 (ĐIỀN SỐ THỰC TẾ SAU KHI CHẠY)
+
+Máy đo: (CPU/RAM của bạn) — mỗi cấu hình chạy `k6 run scripts/k6-reserve.js`
+
+| Cấu hình | Throughput (req/s) | p95 latency | p99 | Vé bán | Oversell |
+|---|---|---|---|---|---|
+| (a) DB pessimistic lock (Ngày 2) | ___ | ___ ms | ___ ms | 100 | 0 |
+| (b) Redis + Lua + RabbitMQ (Ngày 3-6) | ___ | ___ ms | ___ ms | 100 | 0 |
+
+Câu cho CV (điền số): "Chịu tải ___ req/s với p95 = ___ ms trên máy dev,
+0 oversell qua ___ request; chuyển stock ra Redis + ghi đơn async giúp
+throughput tăng ___ lần và p95 giảm ___%."
+
+## Trả lời câu hỏi cuối ngày
+
+**p95 là gì, sao không dùng average?**
+p95 = 95% request nhanh hơn con số này (chỉ 5% chậm hơn). Average bị các
+request siêu nhanh kéo xuống và che mất đuôi chậm: hệ thống có average 50ms
+vẫn có thể bắt 1/20 người dùng chờ 3 giây — và trong flash-sale, 5% của
+10.000 người là 500 khách hàng giận dữ. Tail latency mới là trải nghiệm thật;
+SLA công nghiệp luôn nói bằng percentile (p95/p99), không nói bằng mean.
+
+**Redis giúp cải thiện con số nào, bao nhiêu?**
+Cải thiện throughput và p95 latency của pha reserve (điền số đo thực tế ở
+bảng trên). Lý do cấu trúc: pessimistic lock serialize 200-1000 request trên
+MỘT row Postgres — hàng đợi lock dài ra theo tải, p95 phình rất nhanh.
+Redis xử lý DECR/Lua trong micro-giây, single-threaded nhưng không chờ disk,
+và pha từ chối (phần lớn traffic khi vé hết) không chạm DB; việc ghi đơn
+nặng nề đã đẩy sang consumer async. Số vé bán và oversell KHÔNG đổi (cả hai
+đều đúng) — cái Redis mua được là TỐC ĐỘ, không phải tính đúng.
